@@ -21,3 +21,9 @@ Thumbs.db
 
 # Logs
 *.log
+# Documents
+*.pdf
+*.aux
+*.log
+*.out
+*.toc
