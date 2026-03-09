@@ -1,0 +1,12 @@
+\babel@toc {french}{}\relax 
+\contentsline {section}{\numberline {1}Analyse de l'Architecture Initiale (TP3)}{1}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Le modèle Mono-Client Bloquant}{1}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Solutions Conceptuelles pour la Concurrence}{1}{subsection.1.2}%
+\contentsline {section}{\numberline {2}Implémentation de la Scalabilité (TP4 : Multi-thread)}{2}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Délégation par classe interne \texttt {Runnable}}{2}{subsection.2.1}%
+\contentsline {section}{\numberline {3}Tests de Performances et Mesure de Charge}{2}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Analyse du Comportement sous Charge (Stress 1)}{2}{subsection.3.1}%
+\contentsline {subsubsection}{\numberline {3.1.1}Cas A : Sans fermeture de connexion (Gouffre de ressources)}{2}{subsubsection.3.1.1}%
+\contentsline {subsubsection}{\numberline {3.1.2}Cas B : Avec fermeture immédiate (Robustesse)}{3}{subsubsection.3.1.2}%
+\contentsline {subsection}{\numberline {3.2}Mesure de la Latence (Ping Applicatif)}{3}{subsection.3.2}%
+\contentsline {section}{\numberline {4}Conclusion}{3}{section.4}%

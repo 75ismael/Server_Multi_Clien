@@ -1,0 +1,172 @@
+\documentclass[11pt,a4paper]{article}
+
+% --- PAQUETS REQUIS ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage{amsmath,amsfonts,amssymb}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+\usepackage{csquotes}
+
+% --- CONFIGURATION DE LA MISE EN PAGE ---
+\geometry{
+  a4paper,
+  left=25mm,
+  right=25mm,
+  top=25mm,
+  bottom=25mm
+}
+
+% --- CONFIGURATION DU CODE (Listings) ---
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.96,0.96,0.96}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\small,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+% --- EN-TÊTES ET PIEDS DE PAGE ---
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Réseaux - Semestre 6}
+\rhead{Compte-Rendu TP3 \& TP4}
+\cfoot{\thepage}
+
+% --- INFORMATIONS DU DOCUMENT ---
+\title{\vspace{-2cm}\Huge\textbf{Compte-Rendu de Travaux Pratiques}\\ \Large Modules TP3 \& TP4 : Programmation Réseau TCP et Scalabilité}
+\author{\textbf{Ismaël Ahamada} \\ \textit{Licence 3 Informatique}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{tcolorbox}[colback=blue!5!white,colframe=blue!75!black,title=Objectif du Document]
+Ce rapport synthétise l'implémentation, les tests et l'analyse théorique de l'évolution d'un serveur de jeu Mastermind fonctionnant sur le protocole TCP. Il documente la transition d'une architecture mono-client basique (TP3) à une architecture multi-client robuste, asynchrone et capable de supporter de fortes charges (TP4).
+\end{tcolorbox}
+
+\tableofcontents
+\vspace{1cm}
+\hrule
+\vspace{1cm}
+
+% ==========================================
+% SECTION 1
+% ==========================================
+\section{Analyse de l'Architecture Initiale (TP3)}
+
+\subsection{Le modèle Mono-Client Bloquant}
+Le serveur implémenté lors du TP3 reposait sur un modèle canonique mono-thread. Le cycle de vie du \texttt{ServerSocket} était structuré autour d'une boucle principale qui appelait la méthode \texttt{accept()}.
+
+\begin{quote}
+\textit{Problématique :} Que se passe-t-il lorsque deux clients se connectent simultanément à ce serveur ?
+\end{quote}
+
+Lorsqu'un premier client établit une connexion (TCP 3-way handshake réussi), la méthode \texttt{accept()} retourne un objet \texttt{Socket}. Le serveur entre alors dans une boucle métier (\texttt{while(!gagne)}) qui effectue des lectures bloquantes via \texttt{BufferedReader.readLine()}. \\
+Si un deuxième client tente de se connecter durant cette phase métier, sa requête TCP \texttt{SYN} sera mise en attente dans la file (\textit{backlog}) du système d'exploitation associée au port d'écoute. Le serveur, dont le seul thread d'exécution est monopolisé par le premier client, ne pourra pas appeler une nouvelle fois \texttt{accept()} pour dépiler cette connexion. Le deuxième client subira un déni de service temporaire (délai d'attente réseau) ou définitif (timeout) tant que la première partie n'est pas achevée.
+
+\subsection{Solutions Conceptuelles pour la Concurrence}
+Pour pallier cette limitation fondamentale des I/O synchrones, l'état de l'art propose trois paradigmes majeurs :
+\begin{enumerate}
+    \item \textbf{Le Multi-threading (Un thread par client) :} Le thread principal est exclusivement dédié à l'acceptation des requêtes (\texttt{accept()}). Chaque nouveau \texttt{Socket} est délégué à un nouveau \textit{Thread} de travail (\textit{Worker Thread}) qui gérera le cycle de vie applicatif du client de manière indépendante.
+    \item \textbf{Les Pools de Threads (Thread Pooling) :} Pour éviter le surcoût (\textit{overhead}) de création/destruction de threads et la saturation de la RAM, on instancie un nombre fixe de threads de travail qui piochent les sockets dans une file d'attente partagée (Pattern \textit{Producer-Consumer}).
+    \item \textbf{Les I/O Asynchrones et le Multiplexage (NIO) :} Utilisation de sélecteurs système (ex: \texttt{select}, \texttt{epoll} sous Linux, ou l'API \texttt{java.nio}). Un seul thread scrute simultanément l'état de multiples canaux (Channels) et ne déclenche de traitement (via API événementielle) \textit{que} lorsque des données sont physiquement prêtes à être lues ou écrites, supprimant tout blocage.
+\end{enumerate}
+
+
+% ==========================================
+% SECTION 2
+% ==========================================
+\section{Implémentation de la Scalabilité (TP4 : Multi-thread)}
+
+Afin de permettre des parties simultanées, l'architecture a été refactorisée selon le modèle "Un thread par client". 
+
+\subsection{Délégation par classe interne \texttt{Runnable}}
+La logique métier du jeu (génération du code aléatoire, calcul des occurrences, envois de réponses) a été encapsulée dans une classe \texttt{ClientHandler} implémentant l'interface \texttt{Runnable}.
+
+\begin{lstlisting}[language=Java, caption={Extrait de la boucle d'ecoute du Serveur Multi-thread}]
+while (true) {
+    // 1. Appel bloquant limite uniquement a l'etablissement de la pile TCP
+    Socket clientSocket = serverSocket.accept();
+    System.out.println("Nouveau client connecte : " + clientSocket.getInetAddress());
+
+    // 2. Delegation immediate a un thread concurrent
+    new Thread(new ClientHandler(clientSocket)).start();
+}
+\end{lstlisting}
+
+% ==========================================
+% SECTION 3
+% ==========================================
+\section{Tests de Performances et Mesure de Charge}
+
+La validation d'une architecture concurrente requiert des scénarios de test extrêmes (Stress Testing). Nous avons conçu l'automate \texttt{IdleClient} et le lanceur paramétrable \texttt{Stress1} pour simuler $n$ connexions virtuelles opérant une transaction complète (connexion $\rightarrow$ requête $\rightarrow$ réponse) chronométrée au moyen de l'horloge système haute précision (\texttt{System.nanoTime()}).
+
+\subsection{Analyse du Comportement sous Charge (Stress 1)}
+
+\subsubsection{Cas A : Sans fermeture de connexion (Gouffre de ressources)}
+Si l'automate ne ferme pas son socket après la transaction, lancer \texttt{java Stress1 5000} force le serveur à instancier et maintenir en vie 5\,000 threads simultanés effectuant des blocages I/O (\textit{Idle waiting}).
+\begin{itemize}
+    \item \textbf{Conséquences système :} Le planificateur de l'OS (\textit{Scheduler}) s'effondre sous le nombre de changements de contexte (\textit{Context Switches}). L'empreinte mémoire explose (Chaque pile d'appel de thread consommant environ 1MB par défaut). Le système atteint rapidement la limite des descripteurs de fichiers autorisés (erreur type \texttt{java.net.SocketException: Too many open files}).
+\end{itemize}
+
+\subsubsection{Cas B : Avec fermeture immédiate (Robustesse)}
+Si le client obéit à une fermeture propre (\texttt{socket.close()}), le comportement du serveur change drastiquement, même pour les mêmes valeurs de charge (ex: \texttt{java Stress1 5000 true}).
+\begin{itemize}
+    \item \textbf{Résilience :} Le taux de rotation (\textit{Churn rate}) des threads et connexions est extrêmement rapide. Dès qu'un client déconnecte, le serveur détruit le thread et le descripteur de fichier et le libère au système (Garbage Collection). La concurrence réelle en un instant $t$ reste faible, permettant au serveur d'écouler la rampe de charge très facilement.
+\end{itemize}
+
+\subsection{Mesure de la Latence (Ping Applicatif)}
+
+Nous avons mesuré le temps de réponse $\Delta t$ s'écoulant entre la soumission de la trame TCP par le client et la réception de la trame de jugement du serveur. Les résultats empiriques (extraits du fichier \texttt{latence.csv}) illustrent l'impact du \texttt{backlog} lors d'un pic de requêtes simultanées :
+
+\begin{center}
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{Nombre de Clients ($n$)} & \textbf{Latence Moyenne (ns)} & \textbf{Latence Moyenne (ms)} \\
+\hline
+1 & 6 425 333 & $\sim$ 6.42 ms \\
+2 & 966 145 & $\sim$ 0.96 ms \\
+10 & 1 396 362 & $\sim$ 1.39 ms \\
+100 & 3 696 213 & $\sim$ 3.69 ms \\
+1000 & 6 019 224 & $\sim$ 6.01 ms \\
+5000 & 6 134 732 & $\sim$ 6.13 ms \\
+\hline
+\end{tabular}
+\end{center}
+
+\textit{Interprétation : } Pour $n=1$, la latence initiale intègre le coût de démarrage (Warm-up de la JVM, compilation JIT des classes de socket). Ensuite, la latence croît proportionnellement (de $\sim$1ms à $\sim$6ms) avec le nombre d'appels \texttt{accept()} se chevauchant au niveau du thread principal.
+
+% ==========================================
+% CONCLUSION
+% ==========================================
+\section{Conclusion}
+La migration du serveur Mastermind vers une architecture Multi-thread a prouvé son efficacité pour gérer des connexions entrelacées de manière non-bloquante au niveau global. Les tests de charge soulignent la fragilité structurelle du paradigme "1 Thread = 1 Client" face aux fuites de connexions (connexions dormantes/inactives), ce qui justifie dans l'industrie l'utilisation de serveurs asynchrones de type NIO/Netty pour la vraie ultra-haute disponibilité.
+
+\end{document}
